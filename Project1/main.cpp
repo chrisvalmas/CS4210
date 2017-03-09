@@ -15,7 +15,7 @@
 // Comparators
 struct CmpSRT { // Shortest time remaining comp
 	bool operator()(const Process& p1, const Process& p2) {
-		return (p1.getRemaining() > p2.getRemaining() || (p1.getRemaining() == p2.getRemaining() && p1.getID() > p2.getID()));
+		return !(p1.getRemaining() > p2.getRemaining() || (p1.getRemaining() == p2.getRemaining() && p1.getID() > p2.getID()));
 	}
 };
 
@@ -208,17 +208,155 @@ void doFCFS(std::deque<Process> processList, std::ofstream& outfile) {
 	std::cout << "time " << t << "ms: Simulator ended for FCFS" << std::endl;
 }
  
-void doSRT(const std::deque<Process>& processList, std::ofstream& outfile) {
-    PPQ processQueue(processList.begin(), processList.end());
-     
-	std::cout << printQueue(processQueue);
-    std::cout << std::endl;
+void doSRT(std::deque<Process> processList, std::ofstream& outfile) {
+	std::deque<Process> readyQueue;
+	std::vector<Process> ioList;
+	std::make_heap(ioList.begin(), ioList.end(), CmpIO());
 
-	 // test print
-    while (!processQueue.empty()) {
-        std::cout << processQueue.top() << std::endl;
-        processQueue.pop();
-    }
+	Process currProcess;
+	currProcess.setRemaining(69420);
+	int t = 0;
+	bool cpuBusy = false;
+	bool doingCS = false;
+	int csStart, csEnd;
+	int numCS = 0;
+	int premeptions = 0;
+	int remainingTime = 0;
+
+	std::vector<int> waitTimes;
+	std::vector<int> turnaroundTimes;
+	std::vector<int> cpuBurstTimes;
+	std::cout << "time " << t << "ms: Simulator started for SRT "  << printQueue(readyQueue) << std::endl;
+
+	while(1) {
+		//loading processes which have arrived into the ready queue
+		while(!processList.empty() && processList.front().arrived(t)) {
+			if(currProcess.getRemaining() > processList.front().getRemaining() && currProcess.getRemaining()!=69420) {
+				std::cout << "time " << t << "ms: Process " << processList.front().getID() << " arrived and will preempt " << currProcess.getID() << " " << printQueue(readyQueue) << std::endl;
+				remainingTime = currProcess.getBurstTime() - (t - currProcess.getStartTime());
+				currProcess.setRemaining(remainingTime);
+				readyQueue.push_back(currProcess);
+				readyQueue.push_back(processList.front());
+				std::sort(readyQueue.begin(), readyQueue.end(), CmpSRT());
+				premeptions++;
+				processList.pop_front();
+				cpuBusy = false;
+				doingCS = false;
+				csStart = -1;
+				csEnd = -1;
+				t+=3;
+			}
+			else {
+				readyQueue.push_back(processList.front());
+				std::cout << "time " << t << "ms: Process " << processList.front().getID() << " arrived and added to ready queue " << printQueue(readyQueue) << std::endl;
+				std::sort(readyQueue.begin(),readyQueue.end(),CmpSRT());
+				processList.pop_front();
+			}
+		}
+
+		if(doingCS and t == csEnd) {
+			doingCS = false;
+			cpuBusy = false;
+			turnaroundTimes.push_back(csEnd - currProcess.getArrivalTime());
+
+			if(!currProcess.completed()) {
+				currProcess.setEndIO(t);
+				ioList.push_back(currProcess);
+				std::push_heap(ioList.begin(),ioList.end(),CmpIO());
+			}
+		}
+
+		if(!ioList.empty()) {
+			while(!ioList.empty() && ioList.front().ioDone(t)) {
+				if(!ioList.front().completed()) {
+					ioList.front().setArrivalTime(t);
+					ioList.front().clearWaitTime();
+					remainingTime = currProcess.getRemaining() - (t - currProcess.getStartTime());
+					currProcess.setRemaining(remainingTime);
+					ioList.front().setRemaining(ioList.front().getBurstTime());
+					if(ioList.front().getRemaining() < currProcess.getRemaining() && !currProcess.completed()) {
+						cpuBusy = false;
+						premeptions++;
+						/*remainingTime = currProcess.getRemaining() - (t - currProcess.getStartTime());
+						currProcess.setRemaining(remainingTime);*/
+						ioList.front().setRemaining(ioList.front().getBurstTime());
+						std::cout << "time " << t << "ms: Process " << ioList.front().getID() << " completed I/O and will preempt " << currProcess.getID() << " " << printQueue(readyQueue) << std::endl;
+						t+=3;
+						readyQueue.push_back(ioList.front());
+						readyQueue.push_back(currProcess);
+						std::sort(readyQueue.begin(),readyQueue.end(),CmpSRT());
+					}
+					else {
+						ioList.front().setRemaining(ioList.front().getBurstTime());
+						readyQueue.push_back(ioList.front());
+						std::sort(readyQueue.begin(), readyQueue.end(), CmpSRT());
+						std::cout << "time " << t << "ms: Process " << ioList.front().getID() << " completed I/O; added to ready queue " << printQueue(readyQueue) << std::endl;
+					}
+				}
+				std::pop_heap(ioList.begin(), ioList.end(), CmpIO());
+				ioList.pop_back();
+			}
+		}
+
+		if(!readyQueue.empty() && !cpuBusy) {
+			numCS++;
+			cpuBusy = true;
+			doingCS = true;
+			csStart = t + t_cs/2;
+			currProcess = readyQueue.front();
+			readyQueue.pop_front();
+		}
+
+		if (doingCS && t == csStart) {
+            doingCS = false;
+			currProcess.setSRTEndBurst(t);
+			currProcess.setStartTime(t);
+			if(currProcess.getRemaining()==currProcess.getBurstTime()) {
+				std::cout << "time " << t << "ms: Process " << currProcess.getID() << " started using the CPU " << printQueue(readyQueue) << std::endl;
+        	}
+        	else {
+        		std::cout << "time " << t << "ms: Process " << currProcess.getID() << " started using the CPU with " << currProcess.getRemaining() << "ms remaining " << printQueue(readyQueue) << std::endl;
+        	}
+        }
+
+		if(cpuBusy && !doingCS) {
+			if(currProcess.burstDone(t)) {
+				currProcess.incCurrBurst();
+				doingCS = true;
+				csEnd = t + t_cs/2;
+				currProcess.setEndIO(csEnd);
+				cpuBurstTimes.push_back(currProcess.getBurstTime());
+				if(currProcess.completed()) {
+					waitTimes.push_back(currProcess.getWaitTime());
+					std::cout << "time " << t << "ms: Process " << currProcess.getID() << " terminated "<< printQueue(readyQueue) << std::endl;
+				}
+				else {
+					waitTimes.push_back(currProcess.getWaitTime());
+					std::cout << "time " << t << "ms: Process " << currProcess.getID() << " completed a CPU burst; "<< currProcess.getBursts() << ((currProcess.getBursts()==1)? " burst":" bursts") <<" to go "<< printQueue(readyQueue) << std::endl;
+					std::cout << "time " << t << "ms: Process " << currProcess.getID() << " switching out of CPU; will block on I/O until time "<< currProcess.getEndIO() << "ms " << printQueue(readyQueue) << std::endl;
+				}
+			}
+		}
+
+		if(readyQueue.empty() && processList.empty() && ioList.empty() && !cpuBusy) break;
+		t++;
+		if(!readyQueue.empty()) {
+			for(unsigned int i=0; i< readyQueue.size(); ++i) {
+				readyQueue[i].incWaitTime();
+			}
+		}
+	}
+
+	waitTimes.push_back(0);
+	outfile << "Algorithm SRT" << std::endl;
+	outfile << "-- average CPU burst time: " << std::setprecision(2) << std::fixed <<(std::accumulate(cpuBurstTimes.begin(), cpuBurstTimes.end(), 0) / (double)cpuBurstTimes.size()) << " ms" << std::endl;
+	outfile << "-- average wait time: " <<(std::accumulate(waitTimes.begin(), waitTimes.end(), 0) / (double)waitTimes.size()) << " ms" << std::endl;
+	outfile << "-- average turnaround time: " << (std::accumulate(turnaroundTimes.begin(), turnaroundTimes.end(), 0) / (double)turnaroundTimes.size()) << " ms" << std::endl;
+	outfile << "-- total number of context switches: " << numCS << std::endl;
+	outfile << "-- total number of preemptions: " << premeptions << std::endl;
+	
+	
+	std::cout << "time " << t << "ms: Simulator ended for SRT" << std::endl;
 }
  
 void doRR(const std::deque<Process>& processList, std::ofstream& outfile) {
